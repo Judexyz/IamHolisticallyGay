@@ -60,17 +60,13 @@ export default async function handler(req, res) {
   }
 
   // 2. Handle Application Commands
-  if (interaction.type === InteractionType.APPLICATION_COMMAND) {
-    const { name, options } = interaction.data;
-    const userId = interaction.member?.user?.id || interaction.user?.id;
-
     if (name === 'widget_setup') {
-      return await handleSetup(options, userId, res, interaction.token);
+      return await handleSetup(options, userId, res, interaction.token, interaction.application_id);
     } else if (name === 'widget_refresh') {
       // Return a deferred message immediately to not exceed the 3 second timeout
       // Vercel Serverless Function might be killed if we do work in background,
       // so we use 'waitUntil' if available, otherwise we just await it and hope it's fast enough.
-      return await handleRefresh(userId, res, interaction.token);
+      return await handleRefresh(userId, res, interaction.token, interaction.application_id);
     }
   }
 
@@ -80,14 +76,14 @@ export default async function handler(req, res) {
     const userId = interaction.member?.user?.id || interaction.user?.id;
 
     if (custom_id.startsWith('v_layout:')) {
-      return await handleVerifyButton(custom_id, userId, res, interaction.token);
+      return await handleVerifyButton(custom_id, userId, res, interaction.token, interaction.application_id);
     }
   }
 
   return res.status(400).send('Unknown interaction');
 }
 
-async function handleSetup(options, userId, res, token) {
+async function handleSetup(options, userId, res, token, appId) {
   // Acknowledge immediately to avoid 3s timeout
   res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 
@@ -104,7 +100,7 @@ async function handleSetup(options, userId, res, token) {
   try {
     const root = await osuApi.getOsuProfileByUsername(username, mode);
     if (!root) {
-      await updateInteractionResponse(token, '❌ Could not find an osu! profile with that username.');
+      await updateInteractionResponse(appId, token, '❌ Could not find an osu! profile with that username.');
       return;
     }
 
@@ -121,7 +117,7 @@ async function handleSetup(options, userId, res, token) {
           type: MessageComponentTypes.BUTTON,
           style: ButtonStyleTypes.LINK,
           label: 'Authorize Discord',
-          url: `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&response_type=token&scope=openid+sdk.social_layer`
+          url: `https://discord.com/oauth2/authorize?client_id=${appId}&response_type=token&scope=openid+sdk.social_layer`
         },
         {
           type: MessageComponentTypes.BUTTON,
@@ -139,17 +135,18 @@ async function handleSetup(options, userId, res, token) {
     };
 
     await updateInteractionResponse(
+      appId,
       token, 
       `To continue, click **Authorize Discord** and close the website window that pops up.\nNext, go to your [osu! Profile Account Settings](https://osu.ppy.sh/home/account/edit) and add this string code into your **Interests** or **Occupation** input box: \`${verificationString}\`\nOnce both tasks are completed, click **Verify Layout** below!`,
       [row]
     );
   } catch (e) {
     console.error(e);
-    await updateInteractionResponse(token, `⚠️ Setup failed: ${e.message}`);
+    await updateInteractionResponse(appId, token, `⚠️ Setup failed: ${e.message}`);
   }
 }
 
-async function handleVerifyButton(custom_id, userId, res, token) {
+async function handleVerifyButton(custom_id, userId, res, token, appId) {
   // Acknowledge immediately to avoid 3s timeout
   res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 
@@ -159,13 +156,13 @@ async function handleVerifyButton(custom_id, userId, res, token) {
 
   const expectedCode = await db.getPendingVerification(userId);
   if (!expectedCode) {
-    await updateInteractionResponse(token, 'No active verification found. Please run `/widget_setup` again.');
+    await updateInteractionResponse(appId, token, 'No active verification found. Please run `/widget_setup` again.');
     return;
   }
 
   const root = await osuApi.getOsuProfileById(osuUserId, mode);
   if (!root) {
-    await updateInteractionResponse(token, 'Failed to query profile updates from osu!');
+    await updateInteractionResponse(appId, token, 'Failed to query profile updates from osu!');
     return;
   }
 
@@ -175,7 +172,7 @@ async function handleVerifyButton(custom_id, userId, res, token) {
   const combinedFields = `${interests} ${occupation} ${location}`;
 
   if (!combinedFields.includes(expectedCode)) {
-    await updateInteractionResponse(token, `Verification failed! I could not detect code \`${expectedCode}\` in your profile's account settings text fields yet.`);
+    await updateInteractionResponse(appId, token, `Verification failed! I could not detect code \`${expectedCode}\` in your profile's account settings text fields yet.`);
     return;
   }
 
@@ -184,36 +181,36 @@ async function handleVerifyButton(custom_id, userId, res, token) {
     await db.addOrUpdateUser(userId, osuUserId, mode);
     await db.deletePendingVerification(userId);
 
-    const codeSnippet = `(async ()=>{let _mods=webpackChunkdiscord_app.push([[Symbol()],{},e=>e.c]);webpackChunkdiscord_app.pop(); let findByProps=(...e)=>{for(let t of Object.values(_mods))try{if(!t.exports||t.exports===window)continue;if(e.every(e=>t.exports?.[e]))return t.exports;for(let r in t.exports)if(e.every(e=>t.exports?.[r]?.[e])&&"IntlMessagesProxy"!==t.exports[r][Symbol.toStringTag])return t.exports[r]}}catch{}}}; let api = Object.values(_mods).find(x => x?.exports?.Bo?.get).exports.Bo; let id = findByProps("getCurrentUser").getCurrentUser().id; let current_widgets = (await api.get("/users/" + id + "/profile")).body.widgets; if (current_widgets.map(x=>x.data?.application_id).includes("${CLIENT_ID}")) {return console.log("Already in your widgets — remove it via Discord client to re-add");} current_widgets.unshift({"data":{"type":"application","application_id":"${CLIENT_ID}"}}); await api.put({url:"/users/@me/widgets",body:{widgets:current_widgets}});})()`;
+    const codeSnippet = `(async ()=>{let _mods=webpackChunkdiscord_app.push([[Symbol()],{},e=>e.c]);webpackChunkdiscord_app.pop(); let findByProps=(...e)=>{for(let t of Object.values(_mods))try{if(!t.exports||t.exports===window)continue;if(e.every(e=>t.exports?.[e]))return t.exports;for(let r in t.exports)if(e.every(e=>t.exports?.[r]?.[e])&&"IntlMessagesProxy"!==t.exports[r][Symbol.toStringTag])return t.exports[r]}}catch{}}}; let api = Object.values(_mods).find(x => x?.exports?.Bo?.get).exports.Bo; let id = findByProps("getCurrentUser").getCurrentUser().id; let current_widgets = (await api.get("/users/" + id + "/profile")).body.widgets; if (current_widgets.map(x=>x.data?.application_id).includes("${appId}")) {return console.log("Already in your widgets — remove it via Discord client to re-add");} current_widgets.unshift({"data":{"type":"application","application_id":"${appId}"}}); await api.put({url:"/users/@me/widgets",body:{widgets:current_widgets}});})()`;
 
-    await updateInteractionResponse(token, `Verification Successful! You can now add the widget to your profile:\n1\\. Open Discord in your browser.\n2\\. Open your browsers developer tools (CTRL + Shift + I).\n3\\. Open the Console tab.\n4\\. Type \`allow pasting\` into the console.\n5\\. Paste in the following code:\n\`\`\`js\n${codeSnippet}\n\`\`\`\n6\\. Reload your Discord client using CTRL + R. You can also safely remove the code snippet from your osu! profile description now.`);
+    await updateInteractionResponse(appId, token, `Verification Successful! You can now add the widget to your profile:\n1\\. Open Discord in your browser.\n2\\. Open your browsers developer tools (CTRL + Shift + I).\n3\\. Open the Console tab.\n4\\. Type \`allow pasting\` into the console.\n5\\. Paste in the following code:\n\`\`\`js\n${codeSnippet}\n\`\`\`\n6\\. Reload your Discord client using CTRL + R. You can also safely remove the code snippet from your osu! profile description now.`);
   } catch (e) {
     console.error(e);
-    await updateInteractionResponse(token, `⚠️ Account confirmed with osu!, but Discord rejected the layout synchronization. Did you open and complete the 'Authorize Discord' button link first?\n\nError: ${e.message}`);
+    await updateInteractionResponse(appId, token, `⚠️ Account confirmed with osu!, but Discord rejected the layout synchronization. Did you open and complete the 'Authorize Discord' button link first?\n\nError: ${e.message}`);
   }
 }
 
-async function handleRefresh(userId, res, token) {
+async function handleRefresh(userId, res, token, appId) {
   // Defer response
   res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 
   const user = await db.getUser(userId);
   if (!user) {
-    await updateInteractionResponse(token, '❌ You haven\'t linked an account yet! Please run `/widget_setup` first.');
+    await updateInteractionResponse(appId, token, '❌ You haven\'t linked an account yet! Please run `/widget_setup` first.');
     return;
   }
 
   try {
     await syncService.syncUserDiscordWidget(userId, user.osu_user_id, user.mode);
-    await updateInteractionResponse(token, '🔄 Widget successfully refreshed with your latest live stats!');
+    await updateInteractionResponse(appId, token, '🔄 Widget successfully refreshed with your latest live stats!');
   } catch (e) {
     console.error(e);
-    await updateInteractionResponse(token, `⚠️ Update sync failed: ${e.message}`);
+    await updateInteractionResponse(appId, token, `⚠️ Update sync failed: ${e.message}`);
   }
 }
 
-async function updateInteractionResponse(token, content, components) {
-  const url = `https://discord.com/api/v10/webhooks/${CLIENT_ID}/${token}/messages/@original`;
+async function updateInteractionResponse(appId, token, content, components) {
+  const url = `https://discord.com/api/v10/webhooks/${appId}/${token}/messages/@original`;
   const body = { content };
   if (components) body.components = components;
 
