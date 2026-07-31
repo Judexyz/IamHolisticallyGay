@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     const userId = interaction.member?.user?.id || interaction.user?.id;
 
     if (name === 'widget_setup') {
-      return await handleSetup(options, userId, res);
+      return await handleSetup(options, userId, res, interaction.token);
     } else if (name === 'widget_refresh') {
       // Return a deferred message immediately to not exceed the 3 second timeout
       // Vercel Serverless Function might be killed if we do work in background,
@@ -87,7 +87,10 @@ export default async function handler(req, res) {
   return res.status(400).send('Unknown interaction');
 }
 
-async function handleSetup(options, userId, res) {
+async function handleSetup(options, userId, res, token) {
+  // Acknowledge immediately to avoid 3s timeout
+  res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+
   let username = 'Bukalapak';
   let mode = 'osu';
 
@@ -98,51 +101,52 @@ async function handleSetup(options, userId, res) {
     }
   }
 
-  const root = await osuApi.getOsuProfileByUsername(username, mode);
-  if (!root) {
-    return res.send({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: '❌ Could not find an osu! profile with that username.' }
-    });
-  }
-
-  const osuUserId = String(root.id);
-  const verificationString = `osu-widget-${Math.random().toString(36).slice(2, 10)}`;
-  
-  // Store verification string in Vercel KV for 30 minutes
-  await db.setPendingVerification(userId, verificationString);
-
-  const row = {
-    type: MessageComponentTypes.ACTION_ROW,
-    components: [
-      {
-        type: MessageComponentTypes.BUTTON,
-        style: ButtonStyleTypes.LINK,
-        label: 'Authorize Discord',
-        url: `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&response_type=token&scope=openid+sdk.social_layer`
-      },
-      {
-        type: MessageComponentTypes.BUTTON,
-        style: ButtonStyleTypes.LINK,
-        label: 'osu! Profile',
-        url: `https://osu.ppy.sh/users/${osuUserId}`
-      },
-      {
-        type: MessageComponentTypes.BUTTON,
-        style: ButtonStyleTypes.PRIMARY,
-        label: 'Verify Layout',
-        custom_id: `v_layout:${osuUserId}:${mode}`
-      }
-    ]
-  };
-
-  return res.send({
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      content: `To continue, click **Authorize Discord** and close the website window that pops up.\nNext, go to your [osu! Profile Account Settings](https://osu.ppy.sh/home/account/edit) and add this string code into your **Interests** or **Occupation** input box: \`${verificationString}\`\nOnce both tasks are completed, click **Verify Layout** below!`,
-      components: [row]
+  try {
+    const root = await osuApi.getOsuProfileByUsername(username, mode);
+    if (!root) {
+      await updateInteractionResponse(token, '❌ Could not find an osu! profile with that username.');
+      return;
     }
-  });
+
+    const osuUserId = String(root.id);
+    const verificationString = `osu-widget-${Math.random().toString(36).slice(2, 10)}`;
+    
+    // Store verification string in Vercel KV for 30 minutes
+    await db.setPendingVerification(userId, verificationString);
+
+    const row = {
+      type: MessageComponentTypes.ACTION_ROW,
+      components: [
+        {
+          type: MessageComponentTypes.BUTTON,
+          style: ButtonStyleTypes.LINK,
+          label: 'Authorize Discord',
+          url: `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&response_type=token&scope=openid+sdk.social_layer`
+        },
+        {
+          type: MessageComponentTypes.BUTTON,
+          style: ButtonStyleTypes.LINK,
+          label: 'osu! Profile',
+          url: `https://osu.ppy.sh/users/${osuUserId}`
+        },
+        {
+          type: MessageComponentTypes.BUTTON,
+          style: ButtonStyleTypes.PRIMARY,
+          label: 'Verify Layout',
+          custom_id: `v_layout:${osuUserId}:${mode}`
+        }
+      ]
+    };
+
+    await updateInteractionResponse(
+      token, 
+      `To continue, click **Authorize Discord** and close the website window that pops up.\nNext, go to your [osu! Profile Account Settings](https://osu.ppy.sh/home/account/edit) and add this string code into your **Interests** or **Occupation** input box: \`${verificationString}\`\nOnce both tasks are completed, click **Verify Layout** below!`,
+      [row]
+    );
+  } catch (e) {
+    console.error(e);
+    await updateInteractionResponse(token, `⚠️ Setup failed: ${e.message}`);
+  }
 }
 
 async function handleVerifyButton(custom_id, userId, res, token) {
@@ -208,11 +212,14 @@ async function handleRefresh(userId, res, token) {
   }
 }
 
-async function updateInteractionResponse(token, content) {
+async function updateInteractionResponse(token, content, components) {
   const url = `https://discord.com/api/v10/webhooks/${CLIENT_ID}/${token}/messages/@original`;
+  const body = { content };
+  if (components) body.components = components;
+
   await fetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content })
+    body: JSON.stringify(body)
   });
 }
