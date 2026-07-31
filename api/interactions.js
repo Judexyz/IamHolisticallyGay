@@ -47,7 +47,7 @@ export default async function handler(req, res) {
     return res.status(401).send('Missing signature or environment variables.');
   }
 
-  const isValidRequest = verifyKey(rawBody, signature, timestamp, DISCORD_PUBLIC_KEY);
+  const isValidRequest = await verifyKey(rawBody, signature, timestamp, DISCORD_PUBLIC_KEY);
   if (!isValidRequest) {
     return res.status(401).send('Bad request signature');
   }
